@@ -7,7 +7,7 @@
 Chrome MCP Bridge 的安装和注册流程如下：
 
 ```
-npm install -g mcp-chrome-bridge
+npm install -g @claude-code-best/mcp-chrome-bridge
 └─ postinstall.js
    ├─ 复制可执行文件到 npm_prefix/bin   ← 总是可写（用户或root权限）
    ├─ 尝试用户级别注册                  ← 无需sudo，大多数情况下成功
@@ -22,7 +22,7 @@ npm install -g mcp-chrome-bridge
 ### 1. 全局安装
 
 ```bash
-npm install -g mcp-chrome-bridge
+npm install -g @claude-code-best/mcp-chrome-bridge
 ```
 
 安装完成后，系统会自动尝试在用户目录中注册 Native Messaging 主机。这不需要管理员权限，是推荐的安装方式。
@@ -256,14 +256,14 @@ manifest.json
 
    ```bash
    # 查找安装路径
-   npm list -g mcp-chrome-bridge
+   npm list -g @claude-code-best/mcp-chrome-bridge
    # 或者对于 pnpm
-   pnpm list -g mcp-chrome-bridge
+   pnpm list -g @claude-code-best/mcp-chrome-bridge
 
    # 设置执行权限（替换为实际路径）
-   chmod +x /path/to/node_modules/mcp-chrome-bridge/run_host.sh
-   chmod +x /path/to/node_modules/mcp-chrome-bridge/index.js
-   chmod +x /path/to/node_modules/mcp-chrome-bridge/cli.js
+   chmod +x /path/to/node_modules/@claude-code-best/mcp-chrome-bridge/run_host.sh
+   chmod +x /path/to/node_modules/@claude-code-best/mcp-chrome-bridge/index.js
+   chmod +x /path/to/node_modules/@claude-code-best/mcp-chrome-bridge/cli.js
    ```
 
    **Windows 平台**：
@@ -291,7 +291,7 @@ manifest.json
 
    ```cmd
    # 查找安装路径
-   npm list -g mcp-chrome-bridge
+   npm list -g @claude-code-best/mcp-chrome-bridge
 
    # 检查文件属性（在文件资源管理器中右键 -> 属性）
    # 确保 run_host.bat 不是只读文件
@@ -301,12 +301,12 @@ manifest.json
 
    ```bash
    # 卸载
-   npm uninstall -g mcp-chrome-bridge
-   # 或 pnpm uninstall -g mcp-chrome-bridge
+   npm uninstall -g @claude-code-best/mcp-chrome-bridge
+   # 或 pnpm uninstall -g @claude-code-best/mcp-chrome-bridge
 
    # 重新安装
-   npm install -g mcp-chrome-bridge
-   # 或 pnpm install -g mcp-chrome-bridge
+   npm install -g @claude-code-best/mcp-chrome-bridge
+   # 或 pnpm install -g @claude-code-best/mcp-chrome-bridge
 
    # 如果仍有问题，运行权限修复
    mcp-chrome-bridge fix-permissions

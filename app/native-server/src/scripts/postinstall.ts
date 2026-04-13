@@ -3,7 +3,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { COMMAND_NAME } from './constant';
+import { COMMAND_NAME, PACKAGE_NAME } from './constant';
 import { colorText, tryRegisterUserLevelHost, writeNodePathFile } from './utils';
 
 // Check if this script is run directly

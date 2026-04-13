@@ -1,5 +1,9 @@
 #!/usr/bin/env node
+import serverInstance from './server';
 import nativeMessagingHostInstance from './native-messaging-host';
+
+// Wire up: native messaging host manages the HTTP server lifecycle
+nativeMessagingHostInstance.setServer(serverInstance);
 
 try {
   nativeMessagingHostInstance.start();

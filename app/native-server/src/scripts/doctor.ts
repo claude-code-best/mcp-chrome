@@ -11,7 +11,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { EXTENSION_ID, HOST_NAME, COMMAND_NAME } from './constant';
+import { EXTENSION_ID, HOST_NAME, COMMAND_NAME, PACKAGE_NAME } from './constant';
 import {
   BrowserType,
   detectInstalledBrowsers,
@@ -24,11 +24,8 @@ import {
   tryRegisterUserLevelHost,
   getLogDir,
 } from './utils';
-import { NATIVE_SERVER_PORT } from '../constant';
 
-const EXPECTED_PORT = 12306;
 const SCHEMA_VERSION = 1;
-const MIN_NODE_MAJOR_VERSION = 20;
 
 // ============================================================================
 // Types
@@ -85,7 +82,6 @@ export interface DoctorReport {
     };
     nativeHost: {
       hostName: string;
-      expectedPort: number;
     };
   };
   fixes: DoctorFixAttempt[];
@@ -142,9 +138,9 @@ function resolveDistDir(): string {
 
   const looksLikeDist = (dir: string): boolean => {
     return (
-      fs.existsSync(path.join(dir, 'mcp', 'stdio-config.json')) ||
       fs.existsSync(path.join(dir, 'run_host.sh')) ||
-      fs.existsSync(path.join(dir, 'run_host.bat'))
+      fs.existsSync(path.join(dir, 'run_host.bat')) ||
+      fs.existsSync(path.join(dir, 'node_path.txt'))
     );
   };
 
@@ -207,22 +203,6 @@ function parseVersionFromDirName(dirName: string): number[] | null {
   const cleaned = dirName.trim().replace(/^v/, '');
   if (!/^\d+(\.\d+){0,3}$/.test(cleaned)) return null;
   return cleaned.split('.').map((part) => Number(part));
-}
-
-/**
- * Parse Node.js version string from `node -v` output.
- * Handles versions like: v20.10.0, v22.0.0-nightly.2024..., v21.0.0-rc.1
- * Returns major version number or null if parsing fails.
- */
-function parseNodeMajorVersion(versionString: string): number | null {
-  if (!versionString) return null;
-  // Match pattern: v?MAJOR.MINOR.PATCH[-anything]
-  const match = versionString.trim().match(/^v?(\d+)(?:\.\d+)*(?:[-+].*)?$/i);
-  if (match?.[1]) {
-    const major = Number(match[1]);
-    return Number.isNaN(major) ? null : major;
-  }
-  return null;
 }
 
 function compareVersions(a: number[], b: number[]): number {
@@ -550,51 +530,6 @@ function readJsonFile(
 // Connectivity Check
 // ============================================================================
 
-type FetchFn = typeof globalThis.fetch;
-
-function resolveFetch(): FetchFn | null {
-  if (typeof globalThis.fetch === 'function') {
-    return globalThis.fetch.bind(globalThis) as FetchFn;
-  }
-  try {
-    const mod = require('node-fetch');
-    return (mod.default ?? mod) as FetchFn;
-  } catch {
-    return null;
-  }
-}
-
-async function checkConnectivity(
-  url: string,
-  timeoutMs: number,
-): Promise<{ ok: boolean; status?: number; error?: string }> {
-  const fetchFn = resolveFetch();
-  if (!fetchFn) {
-    return { ok: false, error: 'fetch is not available (requires Node.js >=20)' };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // Prevent timeout from keeping the process alive
-  if (typeof timeout.unref === 'function') {
-    timeout.unref();
-  }
-
-  try {
-    const res = await fetchFn(url, { method: 'GET', signal: controller.signal });
-    return { ok: res.ok, status: res.status };
-  } catch (e: unknown) {
-    const errMessage = e instanceof Error ? e.message : String(e);
-    const errName = e instanceof Error ? e.name : '';
-    if (errName === 'AbortError' || errMessage.toLowerCase().includes('abort')) {
-      return { ok: false, error: `Timeout after ${timeoutMs}ms` };
-    }
-    return { ok: false, error: errMessage };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 // ============================================================================
 // Summary Computation
 // ============================================================================
@@ -629,7 +564,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const pkg = readPackageJson();
   const distDir = resolveDistDir();
   const rootDir = path.resolve(distDir, '..');
-  const packageName = typeof pkg.name === 'string' ? pkg.name : 'mcp-chrome-bridge';
+  const packageName = typeof pkg.name === 'string' ? pkg.name : PACKAGE_NAME;
   const packageVersion = typeof pkg.version === 'string' ? pkg.version : 'unknown';
   const commandInfo = getCommandInfo(pkg);
 
@@ -640,7 +575,6 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const wrapperPath = path.resolve(distDir, wrapperScriptName);
   const nodeScriptPath = path.resolve(distDir, 'index.js');
   const logDir = getLogDir();
-  const stdioConfigPath = path.resolve(distDir, 'mcp', 'stdio-config.json');
 
   // Run fixes if requested
   const fixes = await attemptFixes(
@@ -671,7 +605,6 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const missingHostFiles: string[] = [];
   if (!fs.existsSync(wrapperPath)) missingHostFiles.push(wrapperPath);
   if (!fs.existsSync(nodeScriptPath)) missingHostFiles.push(nodeScriptPath);
-  if (!fs.existsSync(stdioConfigPath)) missingHostFiles.push(stdioConfigPath);
 
   if (missingHostFiles.length > 0) {
     checks.push({
@@ -681,14 +614,14 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       message: `Missing required files (${missingHostFiles.length})`,
       details: { missing: missingHostFiles },
     });
-    nextSteps.push(`Reinstall: npm install -g ${COMMAND_NAME}`);
+    nextSteps.push(`Reinstall: npm install -g ${PACKAGE_NAME}`);
   } else {
     checks.push({
       id: 'host.files',
       title: 'Host files',
       status: 'ok',
       message: `Wrapper: ${wrapperPath}`,
-      details: { wrapperPath, nodeScriptPath, stdioConfigPath },
+      details: { wrapperPath, nodeScriptPath },
     });
   }
 
@@ -732,16 +665,12 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     }
   }
 
-  // Parse Node version and check if it meets minimum requirement
-  const nodeMajorVersion = parseNodeMajorVersion(nodeResolution.version || '');
-  const nodeVersionTooOld = nodeMajorVersion !== null && nodeMajorVersion < MIN_NODE_MAJOR_VERSION;
-
   const nodePathWarn =
     Boolean(nodeResolution.nodePath) &&
     (!nodeResolution.nodePathFile.exists || nodeResolution.nodePathFile.valid === false) &&
     !process.env.CHROME_MCP_NODE_PATH;
 
-  // Determine node check status: error if not found or version too old, warn if path issue
+  // Determine node check status: error if not found, warn if path issue
   let nodeStatus: DoctorStatus = 'ok';
   let nodeMessage: string;
   let nodeFix: string[] | undefined;
@@ -762,11 +691,6 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       `Reinstall/repair Node.js`,
     ];
     nextSteps.push(`Verify Node.js: "${nodeResolution.nodePath}" -v`);
-  } else if (nodeVersionTooOld) {
-    nodeStatus = 'error';
-    nodeMessage = `Node.js ${nodeResolution.version} is too old (requires >= ${MIN_NODE_MAJOR_VERSION}.0.0)`;
-    nodeFix = [`Upgrade Node.js to version ${MIN_NODE_MAJOR_VERSION} or higher`];
-    nextSteps.push(`Upgrade Node.js to version ${MIN_NODE_MAJOR_VERSION}+`);
   } else if (nodePathWarn) {
     nodeStatus = 'warn';
     nodeMessage = `Using ${nodeResolution.source}: ${nodeResolution.nodePath}${nodeResolution.version ? ` (${nodeResolution.version})` : ''}`;
@@ -791,11 +715,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
             path: nodeResolution.nodePath,
             version: nodeResolution.version,
             versionError: nodeResolution.versionError,
-            majorVersion: nodeMajorVersion,
           }
         : undefined,
       nodePathFile: nodeResolution.nodePathFile,
-      minRequired: `>=${MIN_NODE_MAJOR_VERSION}.0.0`,
       fix: nodeFix,
     },
   });
@@ -960,72 +882,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     }
   }
 
-  // Check 7: Port configuration
-  if (fs.existsSync(stdioConfigPath)) {
-    const cfg = readJsonFile(stdioConfigPath);
-    if (!cfg.ok) {
-      checks.push({
-        id: 'port.config',
-        title: 'Port config',
-        status: 'error',
-        message: `Failed to parse stdio-config.json: ${cfg.error}`,
-      });
-    } else {
-      try {
-        const configValue = cfg.value as Record<string, unknown>;
-        const url = new URL(configValue.url as string);
-        const port = Number(url.port);
-        const portOk = port === EXPECTED_PORT;
-        checks.push({
-          id: 'port.config',
-          title: 'Port config',
-          status: portOk ? 'ok' : 'error',
-          message: configValue.url as string,
-          details: {
-            expectedPort: EXPECTED_PORT,
-            actualPort: port,
-            fix: portOk ? undefined : [`${COMMAND_NAME} update-port ${EXPECTED_PORT}`],
-          },
-        });
-        if (!portOk) nextSteps.push(`${COMMAND_NAME} update-port ${EXPECTED_PORT}`);
-
-        // Check constant consistency
-        const nativePortOk = NATIVE_SERVER_PORT === EXPECTED_PORT;
-        checks.push({
-          id: 'port.constant',
-          title: 'Port constant',
-          status: nativePortOk ? 'ok' : 'warn',
-          message: `NATIVE_SERVER_PORT=${NATIVE_SERVER_PORT}`,
-          details: { expectedPort: EXPECTED_PORT },
-        });
-
-        // Connectivity check
-        const pingUrl = new URL('/ping', url);
-        const ping = await checkConnectivity(pingUrl.toString(), 1500);
-        checks.push({
-          id: 'connectivity',
-          title: 'Connectivity',
-          status: ping.ok ? 'ok' : 'warn',
-          message: ping.ok
-            ? `GET ${pingUrl} -> ${ping.status}`
-            : `GET ${pingUrl} failed (${ping.error || 'unknown error'})`,
-          details: {
-            hint: 'If the server is not running, click "Connect" in the extension and retry.',
-          },
-        });
-        if (!ping.ok) nextSteps.push('Click "Connect" in the extension, then re-run doctor');
-      } catch (e) {
-        checks.push({
-          id: 'port.config',
-          title: 'Port config',
-          status: 'error',
-          message: `Invalid URL in stdio-config.json: ${stringifyError(e)}`,
-        });
-      }
-    }
-  }
-
-  // Check 8: Logs directory
+  // Check 7: Logs directory
   checks.push({
     id: 'logs',
     title: 'Logs',
@@ -1051,7 +908,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
       node: { version: process.version, execPath: process.execPath },
       package: { name: packageName, version: packageVersion, rootDir, distDir },
       command: { canonical: commandInfo.canonical, aliases: commandInfo.aliases },
-      nativeHost: { hostName: HOST_NAME, expectedPort: EXPECTED_PORT },
+      nativeHost: { hostName: HOST_NAME },
     },
     fixes,
     checks,

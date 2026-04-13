@@ -1,3 +1,4 @@
+export const PACKAGE_NAME = '@claude-code-best/mcp-chrome-bridge';
 export const COMMAND_NAME = 'mcp-chrome-bridge';
 export const EXTENSION_ID = 'hbdgbgagpkpjffpklnamcljpakneikee';
 export const HOST_NAME = 'com.chromemcp.nativehost';

@@ -1,9 +1,9 @@
 import { stdin, stdout } from 'process';
+import { Server } from './server';
 import { v4 as uuidv4 } from 'uuid';
 import { NativeMessageType } from 'chrome-mcp-shared';
-import { TIMEOUTS } from './constant';
+import { TIMEOUTS, NATIVE_SERVER_PORT } from './constant';
 import fileHandler from './file-handler';
-import ipcServerInstance from './ipc/ipc-server';
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -12,12 +12,16 @@ interface PendingRequest {
 }
 
 export class NativeMessagingHost {
+  private associatedServer: Server | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+
+  public setServer(serverInstance: Server): void {
+    this.associatedServer = serverInstance;
+  }
 
   // add message handler to wait for start server
   public start(): void {
     try {
-      ipcServerInstance.setNativeHost(this);
       this.setupMessageHandling();
     } catch (error: any) {
       process.exit(1);
@@ -116,10 +120,10 @@ export class NativeMessagingHost {
     try {
       switch (message.type) {
         case NativeMessageType.START:
-          await this.initServices();
+          await this.startServer(message.payload?.port || NATIVE_SERVER_PORT);
           break;
         case NativeMessageType.STOP:
-          await this.cleanupServices();
+          await this.stopServer();
           break;
         // Keep ping/pong for simple liveness detection, but this differs from request-response pattern
         case 'ping_from_extension':
@@ -138,31 +142,6 @@ export class NativeMessagingHost {
       }
     } catch (error: any) {
       this.sendError(`Failed to handle directive message: ${error.message}`);
-    }
-  }
-
-  /**
-   * Initialize services when Chrome extension sends START.
-   * Starts the IPC server so stdio MCP processes can connect.
-   */
-  private async initServices(): Promise<void> {
-    try {
-      await ipcServerInstance.start();
-      this.sendMessage({ type: NativeMessageType.SERVER_STARTED });
-    } catch (error: any) {
-      this.sendError(`Failed to initialize services: ${error.message}`);
-    }
-  }
-
-  /**
-   * Clean up services when Chrome extension sends STOP.
-   */
-  private async cleanupServices(): Promise<void> {
-    try {
-      await ipcServerInstance.stop();
-      this.sendMessage({ type: NativeMessageType.SERVER_STOPPED });
-    } catch (error: any) {
-      this.sendError(`Failed to cleanup services: ${error.message}`);
     }
   }
 
@@ -237,6 +216,59 @@ export class NativeMessagingHost {
   }
 
   /**
+   * Start Fastify server
+   */
+  private async startServer(port: number): Promise<void> {
+    if (!this.associatedServer) {
+      this.sendError('Internal error: server instance not set');
+      return;
+    }
+    try {
+      if (this.associatedServer.isRunning) {
+        this.sendMessage({
+          type: NativeMessageType.ERROR,
+          payload: { message: 'Server is already running' },
+        });
+        return;
+      }
+
+      await this.associatedServer.start(port, this);
+
+      this.sendMessage({
+        type: NativeMessageType.SERVER_STARTED,
+        payload: { port },
+      });
+    } catch (error: any) {
+      this.sendError(`Failed to start server: ${error.message}`);
+    }
+  }
+
+  /**
+   * Stop Fastify server
+   */
+  private async stopServer(): Promise<void> {
+    if (!this.associatedServer) {
+      this.sendError('Internal error: server instance not set');
+      return;
+    }
+    try {
+      if (!this.associatedServer.isRunning) {
+        this.sendMessage({
+          type: NativeMessageType.ERROR,
+          payload: { message: 'Server is not running' },
+        });
+        return;
+      }
+
+      await this.associatedServer.stop();
+
+      this.sendMessage({ type: NativeMessageType.SERVER_STOPPED });
+    } catch (error: any) {
+      this.sendError(`Failed to stop server: ${error.message}`);
+    }
+  }
+
+  /**
    * Send message to Chrome extension
    */
   public sendMessage(message: any): void {
@@ -279,15 +311,18 @@ export class NativeMessagingHost {
     });
     this.pendingRequests.clear();
 
-    // Stop IPC server
-    ipcServerInstance
-      .stop()
-      .then(() => {
-        process.exit(0);
-      })
-      .catch(() => {
-        process.exit(1);
-      });
+    if (this.associatedServer && this.associatedServer.isRunning) {
+      this.associatedServer
+        .stop()
+        .then(() => {
+          process.exit(0);
+        })
+        .catch(() => {
+          process.exit(1);
+        });
+    } else {
+      process.exit(0);
+    }
   }
 }
 

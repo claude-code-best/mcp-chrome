@@ -72,7 +72,7 @@ mcp-chrome-bridge register --browser all
 #### 全局安装（会自动注册检测到的浏览器）
 
 ```bash
-npm i -g mcp-chrome-bridge
+npm i -g @claude-code-best/mcp-chrome-bridge
 ```
 
 #### 浏览器支持

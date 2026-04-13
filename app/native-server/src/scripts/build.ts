@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { COMMAND_NAME } from './constant';
 
 const distDir = path.join(__dirname, '..', '..', 'dist');
 // 清理上次构建
@@ -50,12 +51,12 @@ const readmeContent = `# ${packageJson.name}
 3. 注册Native Messaging主机:
    \`\`\`
    # 用户级别安装（推荐）
-   ${packageJson.name} register
+   ${COMMAND_NAME} register
 
    # 如果用户级别安装失败，可以尝试系统级别安装
-   ${packageJson.name} register --system
+   ${COMMAND_NAME} register --system
    # 或者使用管理员权限
-   sudo ${packageJson.name} register
+   sudo ${COMMAND_NAME} register
    \`\`\`
 
 ## 使用方法
