@@ -400,6 +400,16 @@ function resolveTargetBrowsers(browserArg: string | undefined): BrowserType[] | 
   return [parsed];
 }
 
+/**
+ * Returns true when the user explicitly requested specific browsers
+ * (i.e. passed `--browser chrome|chromium|all`).
+ */
+function isBrowserExplicitlyRequested(browserArg: string | undefined): boolean {
+  if (!browserArg) return false;
+  const normalized = browserArg.toLowerCase();
+  return normalized !== 'detect' && normalized !== 'auto';
+}
+
 function resolveBrowsersToCheck(requested: BrowserType[] | undefined): BrowserType[] {
   if (requested && requested.length > 0) return requested;
   const detected = detectInstalledBrowsers();
@@ -569,6 +579,9 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const commandInfo = getCommandInfo(pkg);
 
   const targetBrowsers = resolveTargetBrowsers(options.browser);
+  const detectedBrowsers = detectInstalledBrowsers();
+  const noBrowserDetected =
+    detectedBrowsers.length === 0 && !isBrowserExplicitlyRequested(options.browser);
   const browsersToCheck = resolveBrowsersToCheck(targetBrowsers);
 
   const wrapperScriptName = process.platform === 'win32' ? 'run_host.bat' : 'run_host.sh';
@@ -722,77 +735,94 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
     },
   });
 
-  // Check 5: Manifest checks per browser
-  const expectedOrigin = `chrome-extension://${EXTENSION_ID}/`;
-  for (const browser of browsersToCheck) {
-    const config = getBrowserConfig(browser);
-    const candidates = [config.userManifestPath, config.systemManifestPath];
-    const found = candidates.find((p) => fs.existsSync(p));
-
-    if (!found) {
-      checks.push({
-        id: `manifest.${browser}`,
-        title: `${config.displayName} manifest`,
-        status: 'error',
-        message: 'Manifest not found',
-        details: {
-          expected: candidates,
-          fix: [
-            `${COMMAND_NAME} register --browser ${browser}`,
-            `${COMMAND_NAME} register --detect`,
-          ],
-        },
-      });
-      nextSteps.push(`${COMMAND_NAME} register --detect`);
-      continue;
-    }
-
-    const parsed = readJsonFile(found);
-    if (!parsed.ok) {
-      checks.push({
-        id: `manifest.${browser}`,
-        title: `${config.displayName} manifest`,
-        status: 'error',
-        message: `Failed to parse manifest: ${parsed.error}`,
-        details: { path: found, fix: [`${COMMAND_NAME} register --browser ${browser}`] },
-      });
-      nextSteps.push(`${COMMAND_NAME} register --browser ${browser}`);
-      continue;
-    }
-
-    const manifest = parsed.value as Record<string, unknown>;
-    const issues: string[] = [];
-    if (manifest.name !== HOST_NAME) issues.push(`name != ${HOST_NAME}`);
-    if (manifest.type !== 'stdio') issues.push(`type != stdio`);
-    if (typeof manifest.path !== 'string') issues.push('path is missing');
-    if (typeof manifest.path === 'string') {
-      const actual = normalizeComparablePath(manifest.path);
-      const expected = normalizeComparablePath(wrapperPath);
-      if (actual !== expected) issues.push('path does not match installed wrapper');
-      if (!fs.existsSync(manifest.path)) issues.push('path target does not exist');
-    }
-    const allowedOrigins = manifest.allowed_origins;
-    if (!Array.isArray(allowedOrigins) || !allowedOrigins.includes(expectedOrigin)) {
-      issues.push(`allowed_origins missing ${expectedOrigin}`);
-    }
-
+  // Check 4.5: Browser detection (skip manifest checks when no browser found)
+  if (noBrowserDetected) {
     checks.push({
-      id: `manifest.${browser}`,
-      title: `${config.displayName} manifest`,
-      status: issues.length === 0 ? 'ok' : 'error',
-      message: issues.length === 0 ? found : `Invalid manifest (${issues.join('; ')})`,
+      id: 'browser.detect',
+      title: 'Browser detection',
+      status: 'warn',
+      message:
+        'No supported browser (Chrome/Chromium) detected in this environment. ' +
+        'The MCP Chrome Bridge requires a browser with the companion extension installed. ' +
+        'If you are running in a headless or remote environment (e.g. Codespaces, CI), ' +
+        'this is expected — install Chrome and the extension to enable full functionality.',
       details: {
-        path: found,
-        expectedWrapperPath: wrapperPath,
-        expectedOrigin,
-        fix: issues.length === 0 ? undefined : [`${COMMAND_NAME} register --browser ${browser}`],
+        hint: 'You can safely ignore this warning if you only need the MCP server without browser integration.',
       },
     });
-    if (issues.length > 0) nextSteps.push(`${COMMAND_NAME} register --browser ${browser}`);
-  }
+  } else {
+    // Check 5: Manifest checks per browser
+    const expectedOrigin = `chrome-extension://${EXTENSION_ID}/`;
+    for (const browser of browsersToCheck) {
+      const config = getBrowserConfig(browser);
+      const candidates = [config.userManifestPath, config.systemManifestPath];
+      const found = candidates.find((p) => fs.existsSync(p));
 
-  // Check 6: Windows registry (Windows only)
-  if (process.platform === 'win32') {
+      if (!found) {
+        checks.push({
+          id: `manifest.${browser}`,
+          title: `${config.displayName} manifest`,
+          status: 'error',
+          message: 'Manifest not found',
+          details: {
+            expected: candidates,
+            fix: [
+              `${COMMAND_NAME} register --browser ${browser}`,
+              `${COMMAND_NAME} register --detect`,
+            ],
+          },
+        });
+        nextSteps.push(`${COMMAND_NAME} register --detect`);
+        continue;
+      }
+
+      const parsed = readJsonFile(found);
+      if (!parsed.ok) {
+        checks.push({
+          id: `manifest.${browser}`,
+          title: `${config.displayName} manifest`,
+          status: 'error',
+          message: `Failed to parse manifest: ${parsed.error}`,
+          details: { path: found, fix: [`${COMMAND_NAME} register --browser ${browser}`] },
+        });
+        nextSteps.push(`${COMMAND_NAME} register --browser ${browser}`);
+        continue;
+      }
+
+      const manifest = parsed.value as Record<string, unknown>;
+      const issues: string[] = [];
+      if (manifest.name !== HOST_NAME) issues.push(`name != ${HOST_NAME}`);
+      if (manifest.type !== 'stdio') issues.push(`type != stdio`);
+      if (typeof manifest.path !== 'string') issues.push('path is missing');
+      if (typeof manifest.path === 'string') {
+        const actual = normalizeComparablePath(manifest.path);
+        const expected = normalizeComparablePath(wrapperPath);
+        if (actual !== expected) issues.push('path does not match installed wrapper');
+        if (!fs.existsSync(manifest.path)) issues.push('path target does not exist');
+      }
+      const allowedOrigins = manifest.allowed_origins;
+      if (!Array.isArray(allowedOrigins) || !allowedOrigins.includes(expectedOrigin)) {
+        issues.push(`allowed_origins missing ${expectedOrigin}`);
+      }
+
+      checks.push({
+        id: `manifest.${browser}`,
+        title: `${config.displayName} manifest`,
+        status: issues.length === 0 ? 'ok' : 'error',
+        message: issues.length === 0 ? found : `Invalid manifest (${issues.join('; ')})`,
+        details: {
+          path: found,
+          expectedWrapperPath: wrapperPath,
+          expectedOrigin,
+          fix: issues.length === 0 ? undefined : [`${COMMAND_NAME} register --browser ${browser}`],
+        },
+      });
+      if (issues.length > 0) nextSteps.push(`${COMMAND_NAME} register --browser ${browser}`);
+    }
+  } // end of browser-detect else block
+
+  // Check 6: Windows registry (Windows only, skip if no browser detected)
+  if (process.platform === 'win32' && !noBrowserDetected) {
     for (const browser of browsersToCheck) {
       const config = getBrowserConfig(browser);
       const keySpecs = [
@@ -950,6 +980,13 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       console.log('\nNext steps:');
       report.nextSteps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
     }
+  }
+
+  // When no browser is detected, the only "problems" are expected (no manifest, no registry).
+  // Treat this as a soft pass (exit 0) so callers like setup scripts don't abort.
+  const hasNoBrowserWarning = report.checks.some((c) => c.id === 'browser.detect');
+  if (hasNoBrowserWarning) {
+    return 0;
   }
 
   return report.ok ? 0 : 1;
