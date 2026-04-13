@@ -13,10 +13,7 @@
     "declaration": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "baseUrl": ".",
-    "paths": {
-      "chrome-devtools-frontend/*": ["src/shims/devtools.d.ts"]
-    }
+    "baseUrl": "."
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/*.test.ts"]

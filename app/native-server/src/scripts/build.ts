@@ -23,21 +23,12 @@ execSync('tsc', { stdio: 'inherit' });
 
 // 复制配置文件
 console.log('复制配置文件...');
-const configSourcePath = path.join(__dirname, '..', 'mcp', 'stdio-config.json');
-const configDestPath = path.join(distDir, 'mcp', 'stdio-config.json');
-
+const mcpDistDir = path.join(distDir, 'mcp');
 try {
-  // 确保目标目录存在
-  fs.mkdirSync(path.dirname(configDestPath), { recursive: true });
-
-  if (fs.existsSync(configSourcePath)) {
-    fs.copyFileSync(configSourcePath, configDestPath);
-    console.log(`已将 stdio-config.json 复制到 ${configDestPath}`);
-  } else {
-    console.error(`错误: 配置文件未找到: ${configSourcePath}`);
-  }
+  fs.mkdirSync(mcpDistDir, { recursive: true });
+  console.log(`已确保 ${mcpDistDir} 目录存在`);
 } catch (error) {
-  console.error('复制配置文件时出错:', error);
+  console.error('创建 mcp 目录时出错:', error);
 }
 
 // 复制package.json并更新其内容
@@ -120,7 +111,7 @@ filesToMakeExecutable.forEach((file) => {
 
 // Write node_path.txt immediately after build to ensure Chrome uses the correct Node.js version.
 // This is critical for development mode where dist is deleted on each rebuild.
-// The file points to the same Node.js that compiled the native modules (better-sqlite3 etc.)
+// The file points to the same Node.js that compiled any native modules.
 console.log('写入 node_path.txt...');
 const nodePathFile = path.join(distDir, 'node_path.txt');
 fs.writeFileSync(nodePathFile, process.execPath, 'utf8');
