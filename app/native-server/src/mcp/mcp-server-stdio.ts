@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   CallToolRequestSchema,
   CallToolResult,
@@ -9,26 +8,14 @@ import {
   ListResourcesRequestSchema,
   ListPromptsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { TOOL_SCHEMAS } from 'chrome-mcp-shared';
+import { TOOL_SCHEMAS, NativeMessageType } from 'chrome-mcp-shared';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import * as fs from 'fs';
-import * as path from 'path';
+import { IpcClient } from '../ipc/ipc-client';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+
+const ipcClient = new IpcClient();
 
 let stdioMcpServer: Server | null = null;
-let mcpClient: Client | null = null;
-
-// Read configuration from stdio-config.json
-const loadConfig = () => {
-  try {
-    const configPath = path.join(__dirname, 'stdio-config.json');
-    const configData = fs.readFileSync(configPath, 'utf8');
-    return JSON.parse(configData);
-  } catch (error) {
-    console.error('Failed to load stdio-config.json:', error);
-    throw new Error('Configuration file stdio-config.json not found or invalid');
-  }
-};
 
 export const getStdioMcpServer = () => {
   if (stdioMcpServer) {
@@ -37,7 +24,7 @@ export const getStdioMcpServer = () => {
   stdioMcpServer = new Server(
     {
       name: 'StdioChromeMcpServer',
-      version: '1.0.0',
+      version: '2.0.0',
     },
     {
       capabilities: {
@@ -52,30 +39,69 @@ export const getStdioMcpServer = () => {
   return stdioMcpServer;
 };
 
-export const ensureMcpClient = async () => {
+/**
+ * List dynamic flow tools from the Chrome extension via IPC.
+ */
+async function listDynamicFlowTools(): Promise<Tool[]> {
   try {
-    if (mcpClient) {
-      const pingResult = await mcpClient.ping();
-      if (pingResult) {
-        return mcpClient;
+    const response = await ipcClient.sendRequestAndWait('rr_list_published_flows', {}, 20000);
+    if (response.status === 'success' && response.data && Array.isArray(response.data.items)) {
+      const tools: Tool[] = [];
+      const items = response.data.items;
+      for (const item of items) {
+        const name = `flow.${item.slug}`;
+        const description =
+          (item.meta && item.meta.tool && item.meta.tool.description) ||
+          item.description ||
+          'Recorded flow';
+        const properties: Record<string, any> = {};
+        const required: string[] = [];
+        for (const v of item.variables || []) {
+          const desc = v.label || v.key;
+          const typ = (v.type || 'string').toLowerCase();
+          const prop: any = { description: desc };
+          if (typ === 'boolean') prop.type = 'boolean';
+          else if (typ === 'number') prop.type = 'number';
+          else if (typ === 'enum') {
+            prop.type = 'string';
+            if (v.rules && Array.isArray(v.rules.enum)) prop.enum = v.rules.enum;
+          } else if (typ === 'array') {
+            prop.type = 'array';
+            prop.items = { type: 'string' };
+          } else {
+            prop.type = 'string';
+          }
+          if (v.default !== undefined) prop.default = v.default;
+          if (v.rules && v.rules.required) required.push(v.key);
+          properties[v.key] = prop;
+        }
+        // Run options
+        properties['tabTarget'] = { type: 'string', enum: ['current', 'new'], default: 'current' };
+        properties['refresh'] = { type: 'boolean', default: false };
+        properties['captureNetwork'] = { type: 'boolean', default: false };
+        properties['returnLogs'] = { type: 'boolean', default: false };
+        properties['timeoutMs'] = { type: 'number', minimum: 0 };
+        const tool: Tool = {
+          name,
+          description,
+          inputSchema: { type: 'object', properties, required },
+        };
+        tools.push(tool);
       }
+      return tools;
     }
-
-    const config = loadConfig();
-    mcpClient = new Client({ name: 'Mcp Chrome Proxy', version: '1.0.0' }, { capabilities: {} });
-    const transport = new StreamableHTTPClientTransport(new URL(config.url), {});
-    await mcpClient.connect(transport);
-    return mcpClient;
-  } catch (error) {
-    mcpClient?.close();
-    mcpClient = null;
-    console.error('Failed to connect to MCP server:', error);
+    return [];
+  } catch {
+    return [];
   }
-};
+}
 
 export const setupTools = (server: Server) => {
   // List tools handler
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_SCHEMAS }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const dynamicTools = await listDynamicFlowTools();
+    return { tools: [...TOOL_SCHEMAS, ...dynamicTools] };
+  });
 
   // Call tool handler
   server.setRequestHandler(CallToolRequestSchema, async (request) =>
@@ -91,16 +117,58 @@ export const setupTools = (server: Server) => {
 
 const handleToolCall = async (name: string, args: any): Promise<CallToolResult> => {
   try {
-    const client = await ensureMcpClient();
-    if (!client) {
-      throw new Error('Failed to connect to MCP server');
+    // If calling a dynamic flow tool (name starts with flow.), proxy to common flow-run tool
+    if (name && name.startsWith('flow.')) {
+      try {
+        const listResp = await ipcClient.sendRequestAndWait('rr_list_published_flows', {}, 20000);
+        const items = (listResp.status === 'success' && listResp.data?.items) || [];
+        const slug = name.slice('flow.'.length);
+        const match = items.find((it: any) => it.slug === slug);
+        if (!match) throw new Error(`Flow not found for tool ${name}`);
+        const flowArgs = { flowId: match.id, args };
+        const proxyResp = await ipcClient.sendRequestAndWait(
+          NativeMessageType.CALL_TOOL,
+          { name: 'record_replay_flow_run', args: flowArgs },
+          120000,
+        );
+        if (proxyResp.status === 'success') return proxyResp.data;
+        return {
+          content: [{ type: 'text', text: `Error calling dynamic flow tool: ${proxyResp.error}` }],
+          isError: true,
+        };
+      } catch (err: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error resolving dynamic flow tool: ${err?.message || String(err)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
     }
-    // Use a sane default of 2 minutes; the previous value mistakenly used 2*6*1000 (12s)
-    const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
-    const result = await client.callTool({ name, arguments: args }, undefined, {
-      timeout: DEFAULT_CALL_TIMEOUT_MS,
-    });
-    return result as CallToolResult;
+
+    // Regular tool call — forward to Chrome via IPC
+    const response = await ipcClient.sendRequestAndWait(
+      NativeMessageType.CALL_TOOL,
+      { name, args },
+      120000,
+    );
+
+    if (response.status === 'success') {
+      return response.data;
+    } else {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error calling tool: ${response.error || 'Unknown error'}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   } catch (error: any) {
     return {
       content: [
@@ -115,6 +183,8 @@ const handleToolCall = async (name: string, args: any): Promise<CallToolResult> 
 };
 
 async function main() {
+  // Connect to the IPC socket before starting MCP server
+  await ipcClient.connect();
   const transport = new StdioServerTransport();
   await getStdioMcpServer().connect(transport);
 }

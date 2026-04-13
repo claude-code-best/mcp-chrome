@@ -1,10 +1,7 @@
 #!/usr/bin/env node
-import serverInstance from './server';
 import nativeMessagingHostInstance from './native-messaging-host';
 
 try {
-  serverInstance.setNativeHost(nativeMessagingHostInstance); // Server needs setNativeHost method
-  nativeMessagingHostInstance.setServer(serverInstance); // NativeHost needs setServer method
   nativeMessagingHostInstance.start();
 } catch (error) {
   process.exit(1);
@@ -23,13 +20,12 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-process.on('exit', (code) => {
-});
+process.on('exit', (_code) => {});
 
-process.on('uncaughtException', (error) => {
+process.on('uncaughtException', (_error) => {
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', (_reason) => {
   // Don't exit immediately, let the program continue running
 });

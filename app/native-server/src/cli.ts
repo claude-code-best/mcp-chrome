@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   tryRegisterUserLevelHost,
   colorText,
@@ -12,7 +10,6 @@ import {
 } from './scripts/utils';
 import { BrowserType, parseBrowserType, detectInstalledBrowsers } from './scripts/browser-config';
 import { runDoctor } from './scripts/doctor';
-import { runReport } from './scripts/report';
 
 program
   .version(require('../package.json').version)
@@ -84,7 +81,6 @@ program
 
       // If --system option is specified or running with root/administrator privileges
       if (options.system || hasElevatedPermissions) {
-        // TODO: Update registerWithElevatedPermissions to support multiple browsers
         await registerWithElevatedPermissions();
         console.log(
           colorText('System-level Native Messaging host registered successfully!', 'green'),
@@ -141,42 +137,6 @@ program
     }
   });
 
-// Update port in stdio-config.json
-program
-  .command('update-port <port>')
-  .description('Update the port number in stdio-config.json')
-  .action(async (port: string) => {
-    try {
-      const portNumber = parseInt(port, 10);
-      if (isNaN(portNumber) || portNumber < 1 || portNumber > 65535) {
-        console.error(colorText('Error: Port must be a valid number between 1 and 65535', 'red'));
-        process.exit(1);
-      }
-
-      const configPath = path.join(__dirname, 'mcp', 'stdio-config.json');
-
-      if (!fs.existsSync(configPath)) {
-        console.error(colorText(`Error: Configuration file not found at ${configPath}`, 'red'));
-        process.exit(1);
-      }
-
-      const configData = fs.readFileSync(configPath, 'utf8');
-      const config = JSON.parse(configData);
-
-      const currentUrl = new URL(config.url);
-      currentUrl.port = portNumber.toString();
-      config.url = currentUrl.toString();
-
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 4));
-
-      console.log(colorText(`✓ Port updated successfully to ${portNumber}`, 'green'));
-      console.log(colorText(`Updated URL: ${config.url}`, 'blue'));
-    } catch (error: any) {
-      console.error(colorText(`Failed to update port: ${error.message}`, 'red'));
-      process.exit(1);
-    }
-  });
-
 // Diagnose installation and environment issues
 program
   .command('doctor')
@@ -194,35 +154,6 @@ program
       process.exit(exitCode);
     } catch (error: any) {
       console.error(colorText(`Doctor failed: ${error.message}`, 'red'));
-      process.exit(1);
-    }
-  });
-
-// Export diagnostic report for GitHub Issues
-program
-  .command('report')
-  .description('Export a diagnostic report for GitHub Issues')
-  .option('--json', 'Output report as JSON (default: Markdown)')
-  .option('--output <file>', 'Write report to file instead of stdout')
-  .option('--copy', 'Copy report to clipboard')
-  .option('--no-redact', 'Disable redaction of usernames/paths/tokens')
-  .option('--include-logs <mode>', 'Include wrapper logs: none | tail | full', 'tail')
-  .option('--log-lines <n>', 'Lines to include when --include-logs=tail', '200')
-  .option('-b, --browser <browser>', 'Target browser (chrome, chromium, or all)')
-  .action(async (options) => {
-    try {
-      const exitCode = await runReport({
-        json: Boolean(options.json),
-        output: options.output,
-        copy: Boolean(options.copy),
-        redact: options.redact,
-        includeLogs: options.includeLogs,
-        logLines: options.logLines ? parseInt(options.logLines, 10) : undefined,
-        browser: options.browser,
-      });
-      process.exit(exitCode);
-    } catch (error: any) {
-      console.error(colorText(`Report failed: ${error.message}`, 'red'));
       process.exit(1);
     }
   });

@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import fetch from 'node-fetch';
 
 /**
  * File handler for managing file uploads through the native messaging host
@@ -22,7 +21,7 @@ export class FileHandler {
    * Handle file preparation request from the extension
    */
   async handleFileRequest(request: any): Promise<any> {
-    const { action, fileUrl, base64Data, fileName, filePath, traceFilePath, insightName } = request;
+    const { action, fileUrl, base64Data, fileName, filePath } = request;
 
     try {
       switch (action) {
@@ -43,21 +42,6 @@ export class FileHandler {
 
         case 'cleanupFile':
           return await this.cleanupFile(filePath);
-
-        case 'analyzeTrace': {
-          const targetPath = traceFilePath || filePath;
-          if (!targetPath) {
-            return { success: false, error: 'traceFilePath is required' };
-          }
-          try {
-            // With tsconfig moduleResolution=NodeNext, relative ESM imports need explicit .js extension
-            const { analyzeTraceFile } = await import('./trace-analyzer.js');
-            const res = await analyzeTraceFile(targetPath, insightName);
-            return { success: true, ...res };
-          } catch (e: any) {
-            return { success: false, error: e?.message || String(e) };
-          }
-        }
 
         default:
           return {
@@ -88,7 +72,8 @@ export class FileHandler {
       const filePath = path.join(this.tempDir, finalFileName);
 
       // Get the file buffer
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       // Save to file
       fs.writeFileSync(filePath, buffer);

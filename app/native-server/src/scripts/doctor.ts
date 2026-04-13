@@ -570,7 +570,7 @@ async function checkConnectivity(
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   const fetchFn = resolveFetch();
   if (!fetchFn) {
-    return { ok: false, error: 'fetch is not available (requires Node.js >=18 or node-fetch)' };
+    return { ok: false, error: 'fetch is not available (requires Node.js >=20)' };
   }
 
   const controller = new AbortController();
