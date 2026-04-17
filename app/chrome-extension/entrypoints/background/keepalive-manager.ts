@@ -2,86 +2,57 @@
  * @fileoverview Keepalive Manager
  * @description Global singleton service for managing Service Worker keepalive.
  *
- * This module provides a unified interface for acquiring and releasing keepalive
- * references. Multiple modules can acquire keepalive independently using tags,
- * and the underlying keepalive mechanism will remain active as long as at least
- * one reference is held.
+ * Uses chrome.alarms API to keep the service worker alive.
  */
-
-import {
-  createOffscreenKeepaliveController,
-  type KeepaliveController,
-} from './record-replay-v3/engine/keepalive/offscreen-keepalive';
 
 const LOG_PREFIX = '[KeepaliveManager]';
+const ALARM_NAME = 'sw-keepalive';
 
-/**
- * Singleton keepalive controller instance.
- * Created lazily to avoid initialization issues during module loading.
- */
-let controller: KeepaliveController | null = null;
+const keepaliveTags = new Set<string>();
 
-/**
- * Get or create the singleton keepalive controller.
- */
-function getController(): KeepaliveController {
-  if (!controller) {
-    controller = createOffscreenKeepaliveController({ logger: console });
-    console.debug(`${LOG_PREFIX} Controller initialized`);
+// Start the keepalive alarm
+function ensureAlarm(): void {
+  if (keepaliveTags.size === 0) {
+    chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.45 });
+    console.debug(`${LOG_PREFIX} Alarm started`);
   }
-  return controller;
+}
+
+// Stop the keepalive alarm if no references held
+function maybeStopAlarm(): void {
+  if (keepaliveTags.size === 0) {
+    chrome.alarms.clear(ALARM_NAME);
+    console.debug(`${LOG_PREFIX} Alarm stopped`);
+  }
 }
 
 /**
  * Acquire a keepalive reference with a tag.
  *
- * @param tag - Identifier for the reference (e.g., 'native-host', 'rr-engine')
+ * @param tag - Identifier for the reference (e.g., 'native-host')
  * @returns A release function to call when keepalive is no longer needed
- *
- * @example
- * ```typescript
- * const release = acquireKeepalive('native-host');
- * // ... do work that needs SW to stay alive ...
- * release(); // Release when done
- * ```
  */
 export function acquireKeepalive(tag: string): () => void {
-  try {
-    const release = getController().acquire(tag);
-    console.debug(`${LOG_PREFIX} Acquired keepalive for tag: ${tag}`);
-    return () => {
-      try {
-        release();
-        console.debug(`${LOG_PREFIX} Released keepalive for tag: ${tag}`);
-      } catch (error) {
-        console.warn(`${LOG_PREFIX} Failed to release keepalive for ${tag}:`, error);
-      }
-    };
-  } catch (error) {
-    console.warn(`${LOG_PREFIX} Failed to acquire keepalive for ${tag}:`, error);
-    return () => {};
-  }
+  keepaliveTags.add(tag);
+  ensureAlarm();
+  console.debug(`${LOG_PREFIX} Acquired keepalive for tag: ${tag}`);
+  return () => {
+    keepaliveTags.delete(tag);
+    maybeStopAlarm();
+    console.debug(`${LOG_PREFIX} Released keepalive for tag: ${tag}`);
+  };
 }
 
 /**
  * Check if keepalive is currently active (any references held).
  */
 export function isKeepaliveActive(): boolean {
-  try {
-    return getController().isActive();
-  } catch {
-    return false;
-  }
+  return keepaliveTags.size > 0;
 }
 
 /**
  * Get the current keepalive reference count.
- * Useful for debugging.
  */
 export function getKeepaliveRefCount(): number {
-  try {
-    return getController().getRefCount();
-  } catch {
-    return 0;
-  }
+  return keepaliveTags.size;
 }

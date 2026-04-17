@@ -8,45 +8,16 @@ export async function handleGetStorageStats(): Promise<{
   stats?: any;
   error?: string;
 }> {
-  try {
-    // Get ContentIndexer statistics
-    const { getGlobalContentIndexer } = await import('@/utils/content-indexer');
-    const contentIndexer = getGlobalContentIndexer();
-
-    // Note: Semantic engine initialization is now user-controlled
-    // ContentIndexer will be initialized when user manually triggers semantic engine initialization
-
-    // Get statistics
-    const stats = contentIndexer.getStats();
-
-    return {
-      success: true,
-      stats: {
-        indexedPages: stats.indexedPages || 0,
-        totalDocuments: stats.totalDocuments || 0,
-        totalTabs: stats.totalTabs || 0,
-        indexSize: stats.indexSize || 0,
-        isInitialized: stats.isInitialized || false,
-        semanticEngineReady: stats.semanticEngineReady || false,
-        semanticEngineInitializing: stats.semanticEngineInitializing || false,
-      },
-    };
-  } catch (error: any) {
-    console.error('Background: Failed to get storage stats:', error);
-    return {
-      success: false,
-      error: error.message,
-      stats: {
-        indexedPages: 0,
-        totalDocuments: 0,
-        totalTabs: 0,
-        indexSize: 0,
-        isInitialized: false,
-        semanticEngineReady: false,
-        semanticEngineInitializing: false,
-      },
-    };
-  }
+  return {
+    success: true,
+    stats: {
+      indexedPages: 0,
+      totalDocuments: 0,
+      totalTabs: 0,
+      indexSize: 0,
+      isInitialized: false,
+    },
+  };
 }
 
 /**
@@ -54,29 +25,7 @@ export async function handleGetStorageStats(): Promise<{
  */
 export async function handleClearAllData(): Promise<{ success: boolean; error?: string }> {
   try {
-    // 1. Clear all ContentIndexer indexes
-    try {
-      const { getGlobalContentIndexer } = await import('@/utils/content-indexer');
-      const contentIndexer = getGlobalContentIndexer();
-
-      await contentIndexer.clearAllIndexes();
-      console.log('Storage: ContentIndexer indexes cleared successfully');
-    } catch (indexerError) {
-      console.warn('Background: Failed to clear ContentIndexer indexes:', indexerError);
-      // Continue with other cleanup operations
-    }
-
-    // 2. Clear all VectorDatabase data
-    try {
-      const { clearAllVectorData } = await import('@/utils/vector-database');
-      await clearAllVectorData();
-      console.log('Storage: Vector database data cleared successfully');
-    } catch (vectorError) {
-      console.warn('Background: Failed to clear vector data:', vectorError);
-      // Continue with other cleanup operations
-    }
-
-    // 3. Clear related data in chrome.storage (preserve model preferences)
+    // Clear related data in chrome.storage
     try {
       const keysToRemove = ['vectorDatabaseStats', 'lastCleanupTime', 'contentIndexerStats'];
       await chrome.storage.local.remove(keysToRemove);
