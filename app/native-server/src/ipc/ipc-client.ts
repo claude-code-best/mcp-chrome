@@ -1,5 +1,5 @@
 import * as net from 'net';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { getIpcSocketPath, IpcRequest, IpcResponse } from './protocol';
 
 interface PendingRequest {
@@ -89,7 +89,7 @@ export class IpcClient {
     }
 
     return new Promise<IpcResponse>((resolve, reject) => {
-      const id = uuidv4();
+      const id = randomUUID();
 
       const timeoutId = setTimeout(() => {
         this.pendingRequests.delete(id);

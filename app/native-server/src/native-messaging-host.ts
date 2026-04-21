@@ -1,6 +1,6 @@
 import { stdin, stdout } from 'process';
 import { Server } from './server';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { NativeMessageType } from 'chrome-mcp-shared';
 import { TIMEOUTS, NATIVE_SERVER_PORT } from './constant';
 import fileHandler from './file-handler';
@@ -196,7 +196,7 @@ export class NativeMessagingHost {
     timeoutMs: number = TIMEOUTS.DEFAULT_REQUEST_TIMEOUT,
   ): Promise<any> {
     return new Promise((resolve, reject) => {
-      const requestId = uuidv4(); // Generate unique request ID
+      const requestId = randomUUID();
 
       const timeoutId = setTimeout(() => {
         this.pendingRequests.delete(requestId); // Remove from Map after timeout
@@ -216,7 +216,7 @@ export class NativeMessagingHost {
   }
 
   /**
-   * Start Fastify server
+   * Start HTTP server
    */
   private async startServer(port: number): Promise<void> {
     if (!this.associatedServer) {
@@ -244,7 +244,7 @@ export class NativeMessagingHost {
   }
 
   /**
-   * Stop Fastify server
+   * Stop HTTP server
    */
   private async stopServer(): Promise<void> {
     if (!this.associatedServer) {

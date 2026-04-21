@@ -2,20 +2,16 @@
  * HTTP Server - Core server implementation.
  *
  * Responsibilities:
- * - Fastify instance management
- * - Plugin registration (CORS, etc.)
+ * - Hono instance management
+ * - CORS handling
  * - MCP transport handling (StreamableHTTP + SSE)
  * - Server lifecycle management
  */
-import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import cors from '@fastify/cors';
-import {
-  NATIVE_SERVER_PORT,
-  TIMEOUTS,
-  SERVER_CONFIG,
-  HTTP_STATUS,
-  ERROR_MESSAGES,
-} from '../constant';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import type { HttpBindings } from '@hono/node-server';
+import { serve } from '@hono/node-server';
+import { NATIVE_SERVER_PORT, TIMEOUTS, SERVER_CONFIG, ERROR_MESSAGES } from '../constant';
 import { NativeMessagingHost } from '../native-messaging-host';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -23,21 +19,15 @@ import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer } from '../mcp/mcp-server';
 import type { Server as McpServerInstance } from '@modelcontextprotocol/sdk/server/index.js';
-
-// ============================================================
-// Types
-// ============================================================
-
-interface ExtensionRequestPayload {
-  data?: unknown;
-}
+import type { Server as NodeHttpServer } from 'node:http';
 
 // ============================================================
 // Server Class
 // ============================================================
 
 export class Server {
-  private fastify: FastifyInstance;
+  private app: Hono<{ Bindings: HttpBindings }>;
+  private httpServer: NodeHttpServer | null = null;
   public isRunning = false;
   private nativeHost: NativeMessagingHost | null = null;
   private transportsMap: Map<string, StreamableHTTPServerTransport | SSEServerTransport> =
@@ -45,8 +35,7 @@ export class Server {
   private mcpServersMap: Map<string, McpServerInstance> = new Map();
 
   constructor() {
-    this.fastify = Fastify({ logger: SERVER_CONFIG.LOGGER_ENABLED });
-    this.setupPlugins();
+    this.app = new Hono<{ Bindings: HttpBindings }>();
     this.setupRoutes();
   }
 
@@ -57,32 +46,25 @@ export class Server {
     this.nativeHost = nativeHost;
   }
 
-  private async setupPlugins(): Promise<void> {
-    await this.fastify.register(cors, {
-      origin: (origin, cb) => {
-        // Allow requests with no origin (e.g., curl, server-to-server)
-        if (!origin) {
-          return cb(null, true);
-        }
-        // Check if origin matches any pattern in whitelist
-        const allowed = SERVER_CONFIG.CORS_ORIGIN.some((pattern) =>
-          pattern instanceof RegExp ? pattern.test(origin) : origin.startsWith(pattern),
-        );
-        cb(null, allowed);
-      },
-      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      credentials: true,
-    });
-  }
-
   private setupRoutes(): void {
-    // Health check
+    // CORS middleware
+    this.app.use(
+      '*',
+      cors({
+        origin: (origin) => {
+          if (!origin) return '*';
+          const allowed = SERVER_CONFIG.CORS_ORIGIN.some((pattern) =>
+            pattern instanceof RegExp ? pattern.test(origin) : origin.startsWith(pattern),
+          );
+          return allowed ? origin : '';
+        },
+        allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+        credentials: true,
+      }),
+    );
+
     this.setupHealthRoutes();
-
-    // Extension communication
     this.setupExtensionRoutes();
-
-    // MCP routes
     this.setupMcpRoutes();
   }
 
@@ -91,12 +73,7 @@ export class Server {
   // ============================================================
 
   private setupHealthRoutes(): void {
-    this.fastify.get('/ping', async (_request: FastifyRequest, reply: FastifyReply) => {
-      reply.status(HTTP_STATUS.OK).send({
-        status: 'ok',
-        message: 'pong',
-      });
-    });
+    this.app.get('/ping', (c) => c.json({ status: 'ok', message: 'pong' }));
   }
 
   // ============================================================
@@ -104,42 +81,34 @@ export class Server {
   // ============================================================
 
   private setupExtensionRoutes(): void {
-    this.fastify.get(
-      '/ask-extension',
-      async (request: FastifyRequest<{ Body: ExtensionRequestPayload }>, reply: FastifyReply) => {
-        if (!this.nativeHost) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE });
-        }
-        if (!this.isRunning) {
-          return reply
-            .status(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING });
-        }
+    this.app.get('/ask-extension', async (c) => {
+      if (!this.nativeHost) {
+        return c.json({ error: ERROR_MESSAGES.NATIVE_HOST_NOT_AVAILABLE }, 500);
+      }
+      if (!this.isRunning) {
+        return c.json({ error: ERROR_MESSAGES.SERVER_NOT_RUNNING }, 500);
+      }
 
-        try {
-          const extensionResponse = await this.nativeHost.sendRequestToExtensionAndWait(
-            request.query,
-            'process_data',
-            TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
+      try {
+        const query = c.req.query();
+        const extensionResponse = await this.nativeHost.sendRequestToExtensionAndWait(
+          query,
+          'process_data',
+          TIMEOUTS.EXTENSION_REQUEST_TIMEOUT,
+        );
+        return c.json({ status: 'success', data: extensionResponse });
+      } catch (error: unknown) {
+        const err = error as Error;
+        if (err.message.includes('timed out')) {
+          return c.json({ status: 'error', message: ERROR_MESSAGES.REQUEST_TIMEOUT }, 504);
+        } else {
+          return c.json(
+            { status: 'error', message: `Failed to get response from extension: ${err.message}` },
+            500,
           );
-          return reply.status(HTTP_STATUS.OK).send({ status: 'success', data: extensionResponse });
-        } catch (error: unknown) {
-          const err = error as Error;
-          if (err.message.includes('timed out')) {
-            return reply
-              .status(HTTP_STATUS.GATEWAY_TIMEOUT)
-              .send({ status: 'error', message: ERROR_MESSAGES.REQUEST_TIMEOUT });
-          } else {
-            return reply.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send({
-              status: 'error',
-              message: `Failed to get response from extension: ${err.message}`,
-            });
-          }
         }
-      },
-    );
+      }
+    });
   }
 
   // ============================================================
@@ -147,157 +116,147 @@ export class Server {
   // ============================================================
 
   private setupMcpRoutes(): void {
-    // SSE endpoint
-    this.fastify.get('/sse', async (_, reply) => {
-      try {
-        reply.raw.writeHead(HTTP_STATUS.OK, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
+    // SSE endpoint — uses raw Node.js response for SSEServerTransport compatibility
+    this.app.get('/sse', async (c) => {
+      const { incoming, outgoing } = c.env;
 
-        const transport = new SSEServerTransport('/messages', reply.raw);
-        this.transportsMap.set(transport.sessionId, transport);
+      outgoing.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
 
-        const mcpServer = createMcpServer();
-        this.mcpServersMap.set(transport.sessionId, mcpServer);
+      const transport = new SSEServerTransport('/messages', outgoing);
+      this.transportsMap.set(transport.sessionId, transport);
 
-        reply.raw.on('close', () => {
-          this.transportsMap.delete(transport.sessionId);
-          this.mcpServersMap.delete(transport.sessionId);
-          mcpServer.close().catch(() => {});
-        });
+      const mcpServer = createMcpServer();
+      this.mcpServersMap.set(transport.sessionId, mcpServer);
 
-        await mcpServer.connect(transport);
+      outgoing.on('close', () => {
+        this.transportsMap.delete(transport.sessionId);
+        this.mcpServersMap.delete(transport.sessionId);
+        mcpServer.close().catch(() => {});
+      });
 
-        reply.raw.write(':\n\n');
-      } catch (error) {
-        if (!reply.sent) {
-          reply.code(HTTP_STATUS.INTERNAL_SERVER_ERROR).send(ERROR_MESSAGES.INTERNAL_SERVER_ERROR);
-        }
-      }
+      await mcpServer.connect(transport);
+
+      outgoing.write(':\n\n');
+      return new Response(null);
     });
 
     // SSE messages endpoint
-    this.fastify.post('/messages', async (req, reply) => {
-      try {
-        const { sessionId } = req.query as { sessionId?: string };
-        const transport = this.transportsMap.get(sessionId || '') as SSEServerTransport;
-        if (!sessionId || !transport) {
-          reply.code(HTTP_STATUS.BAD_REQUEST).send('No transport found for sessionId');
-          return;
-        }
-
-        await transport.handlePostMessage(req.raw, reply.raw, req.body);
-      } catch (error) {
-        if (!reply.sent) {
-          reply.code(HTTP_STATUS.INTERNAL_SERVER_ERROR).send(ERROR_MESSAGES.INTERNAL_SERVER_ERROR);
-        }
+    this.app.post('/messages', async (c) => {
+      const sessionId = c.req.query('sessionId') as string | undefined;
+      const transport = this.transportsMap.get(sessionId || '') as SSEServerTransport;
+      if (!sessionId || !transport) {
+        return c.text('No transport found for sessionId', 400);
       }
+
+      const body = await c.req.json();
+      const { incoming, outgoing } = c.env;
+      await transport.handlePostMessage(incoming, outgoing, body);
+      return new Response(null);
     });
 
     // MCP POST endpoint
-    this.fastify.post('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
+    this.app.post('/mcp', async (c) => {
+      const sessionId = c.req.header('mcp-session-id');
       let transport: StreamableHTTPServerTransport | undefined = this.transportsMap.get(
         sessionId || '',
       ) as StreamableHTTPServerTransport;
 
       if (transport) {
         // Transport found, proceed
-      } else if (!sessionId && isInitializeRequest(request.body)) {
-        const newSessionId = randomUUID();
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => newSessionId,
-          onsessioninitialized: (initializedSessionId) => {
-            if (transport && initializedSessionId === newSessionId) {
-              this.transportsMap.set(initializedSessionId, transport);
+      } else if (!sessionId) {
+        const body = await c.req.json();
+        if (isInitializeRequest(body)) {
+          const newSessionId = randomUUID();
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => newSessionId,
+            onsessioninitialized: (initializedSessionId) => {
+              if (transport && initializedSessionId === newSessionId) {
+                this.transportsMap.set(initializedSessionId, transport);
+              }
+            },
+          });
+
+          const mcpServer = createMcpServer();
+
+          transport.onclose = () => {
+            if (transport?.sessionId) {
+              this.transportsMap.delete(transport.sessionId);
+              this.mcpServersMap.delete(transport.sessionId);
             }
-          },
-        });
-
-        const mcpServer = createMcpServer();
-
-        transport.onclose = () => {
-          if (transport?.sessionId) {
-            this.transportsMap.delete(transport.sessionId);
-            this.mcpServersMap.delete(transport.sessionId);
-          }
-        };
-        this.mcpServersMap.set(newSessionId, mcpServer);
-        await mcpServer.connect(transport);
+          };
+          this.mcpServersMap.set(newSessionId, mcpServer);
+          await mcpServer.connect(transport);
+        } else {
+          return c.json({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST }, 400);
+        }
       } else {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
-        return;
+        return c.json({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST }, 400);
       }
 
       try {
-        await transport.handleRequest(request.raw, reply.raw, request.body);
+        const body = await c.req.json().catch(() => undefined);
+        const { incoming, outgoing } = c.env;
+        await transport.handleRequest(incoming, outgoing, body);
+        return new Response(null);
       } catch (error) {
-        if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR });
-        }
+        return c.json({ error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR }, 500);
       }
     });
 
-    // MCP GET endpoint (SSE stream)
-    this.fastify.get('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
+    // MCP GET endpoint (SSE stream for existing session)
+    this.app.get('/mcp', async (c) => {
+      const sessionId = c.req.header('mcp-session-id');
       const transport = sessionId
         ? (this.transportsMap.get(sessionId) as StreamableHTTPServerTransport)
         : undefined;
 
       if (!transport) {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SSE_SESSION });
-        return;
+        return c.json({ error: ERROR_MESSAGES.INVALID_SSE_SESSION }, 400);
       }
 
-      reply.raw.setHeader('Content-Type', 'text/event-stream');
-      reply.raw.setHeader('Cache-Control', 'no-cache');
-      reply.raw.setHeader('Connection', 'keep-alive');
-      reply.raw.flushHeaders();
+      const { incoming, outgoing } = c.env;
+
+      outgoing.setHeader('Content-Type', 'text/event-stream');
+      outgoing.setHeader('Cache-Control', 'no-cache');
+      outgoing.setHeader('Connection', 'keep-alive');
+      outgoing.flushHeaders();
 
       try {
-        await transport.handleRequest(request.raw, reply.raw);
-        if (!reply.sent) {
-          reply.hijack();
-        }
+        await transport.handleRequest(incoming, outgoing);
       } catch (error) {
-        if (!reply.raw.writableEnded) {
-          reply.raw.end();
+        if (!outgoing.writableEnded) {
+          outgoing.end();
         }
       }
 
-      request.socket.on('close', () => {
-        request.log.info(`SSE client disconnected for session: ${sessionId}`);
+      incoming.socket?.on('close', () => {
+        // Client disconnected
       });
+
+      return new Response(null);
     });
 
     // MCP DELETE endpoint
-    this.fastify.delete('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
+    this.app.delete('/mcp', async (c) => {
+      const sessionId = c.req.header('mcp-session-id');
       const transport = sessionId
         ? (this.transportsMap.get(sessionId) as StreamableHTTPServerTransport)
         : undefined;
 
       if (!transport) {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SESSION_ID });
-        return;
+        return c.json({ error: ERROR_MESSAGES.INVALID_SESSION_ID }, 400);
       }
 
       try {
-        await transport.handleRequest(request.raw, reply.raw);
-        if (!reply.sent) {
-          reply.code(HTTP_STATUS.NO_CONTENT).send();
-        }
+        const { incoming, outgoing } = c.env;
+        await transport.handleRequest(incoming, outgoing);
+        return new Response(null, { status: 204 });
       } catch (error) {
-        if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR });
-        }
+        return c.json({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR }, 500);
       }
     });
   }
@@ -317,18 +276,27 @@ export class Server {
       return;
     }
 
-    try {
-      await this.fastify.listen({ port, host: SERVER_CONFIG.HOST });
+    return new Promise<void>((resolve, reject) => {
+      const srv = serve(
+        {
+          fetch: this.app.fetch,
+          port,
+          hostname: SERVER_CONFIG.HOST,
+        },
+        () => {
+          process.env.CHROME_MCP_PORT = String(port);
+          process.env.MCP_HTTP_PORT = String(port);
+          this.isRunning = true;
+          resolve();
+        },
+      );
+      this.httpServer = srv as NodeHttpServer;
 
-      // Set port environment variables after successful listen for Chrome MCP URL resolution
-      process.env.CHROME_MCP_PORT = String(port);
-      process.env.MCP_HTTP_PORT = String(port);
-
-      this.isRunning = true;
-    } catch (err) {
-      this.isRunning = false;
-      throw err;
-    }
+      this.httpServer?.on('error', (err) => {
+        this.isRunning = false;
+        reject(err);
+      });
+    });
   }
 
   public async stop(): Promise<void> {
@@ -336,17 +304,24 @@ export class Server {
       return;
     }
 
-    try {
-      await this.fastify.close();
-      this.isRunning = false;
-    } catch (err) {
-      this.isRunning = false;
-      throw err;
-    }
+    return new Promise<void>((resolve, reject) => {
+      if (!this.httpServer) {
+        this.isRunning = false;
+        resolve();
+        return;
+      }
+
+      this.httpServer.close((err) => {
+        this.httpServer = null;
+        this.isRunning = false;
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 
-  public getInstance(): FastifyInstance {
-    return this.fastify;
+  public getInstance(): Hono<{ Bindings: HttpBindings }> {
+    return this.app;
   }
 }
 
