@@ -1,6 +1,6 @@
 {
   "name": "@claude-code-best/mcp-chrome-bridge",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "Chrome Native-Messaging host (Node) — MCP + message bridge",
   "main": "dist/index.js",
   "bin": {

@@ -21,7 +21,8 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { getMcpServer } from '../mcp/mcp-server';
+import { createMcpServer } from '../mcp/mcp-server';
+import type { Server as McpServerInstance } from '@modelcontextprotocol/sdk/server/index.js';
 
 // ============================================================
 // Types
@@ -41,6 +42,7 @@ export class Server {
   private nativeHost: NativeMessagingHost | null = null;
   private transportsMap: Map<string, StreamableHTTPServerTransport | SSEServerTransport> =
     new Map();
+  private mcpServersMap: Map<string, McpServerInstance> = new Map();
 
   constructor() {
     this.fastify = Fastify({ logger: SERVER_CONFIG.LOGGER_ENABLED });
@@ -157,12 +159,16 @@ export class Server {
         const transport = new SSEServerTransport('/messages', reply.raw);
         this.transportsMap.set(transport.sessionId, transport);
 
+        const mcpServer = createMcpServer();
+        this.mcpServersMap.set(transport.sessionId, mcpServer);
+
         reply.raw.on('close', () => {
           this.transportsMap.delete(transport.sessionId);
+          this.mcpServersMap.delete(transport.sessionId);
+          mcpServer.close().catch(() => {});
         });
 
-        const server = getMcpServer();
-        await server.connect(transport);
+        await mcpServer.connect(transport);
 
         reply.raw.write(':\n\n');
       } catch (error) {
@@ -210,12 +216,16 @@ export class Server {
           },
         });
 
+        const mcpServer = createMcpServer();
+
         transport.onclose = () => {
-          if (transport?.sessionId && this.transportsMap.get(transport.sessionId)) {
+          if (transport?.sessionId) {
             this.transportsMap.delete(transport.sessionId);
+            this.mcpServersMap.delete(transport.sessionId);
           }
         };
-        await getMcpServer().connect(transport);
+        this.mcpServersMap.set(newSessionId, mcpServer);
+        await mcpServer.connect(transport);
       } else {
         reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
         return;
