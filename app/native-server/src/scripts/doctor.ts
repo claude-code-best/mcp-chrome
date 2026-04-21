@@ -132,10 +132,6 @@ function getCommandInfo(pkg: Record<string, unknown>): { canonical: string; alia
 }
 
 function resolveDistDir(): string {
-  // __dirname is dist/scripts when running from compiled code
-  const candidateFromDistScripts = path.resolve(__dirname, '..');
-  const candidateFromSrcScripts = path.resolve(__dirname, '..', '..', 'dist');
-
   const looksLikeDist = (dir: string): boolean => {
     return (
       fs.existsSync(path.join(dir, 'run_host.sh')) ||
@@ -144,7 +140,11 @@ function resolveDistDir(): string {
     );
   };
 
+  // __dirname may be dist/ (bundled cli.js) or dist/scripts/ (tsc output)
+  if (looksLikeDist(__dirname)) return __dirname;
+  const candidateFromDistScripts = path.resolve(__dirname, '..');
   if (looksLikeDist(candidateFromDistScripts)) return candidateFromDistScripts;
+  const candidateFromSrcScripts = path.resolve(__dirname, '..', '..', 'dist');
   if (looksLikeDist(candidateFromSrcScripts)) return candidateFromSrcScripts;
   return candidateFromDistScripts;
 }

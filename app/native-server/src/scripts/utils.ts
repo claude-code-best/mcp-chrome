@@ -110,11 +110,26 @@ export function getSystemManifestPath(): string {
 }
 
 /**
+ * Resolve the dist directory from the current __dirname.
+ * Works both when __dirname is dist/ (bundled) or dist/scripts/ (tsc output).
+ */
+function resolveDistDir(): string {
+  if (
+    fs.existsSync(path.join(__dirname, 'run_host.sh')) ||
+    fs.existsSync(path.join(__dirname, 'run_host.bat')) ||
+    fs.existsSync(path.join(__dirname, 'node_path.txt'))
+  ) {
+    return __dirname;
+  }
+  return path.join(__dirname, '..');
+}
+
+/**
  * Get native host startup script file path
  */
 export async function getMainPath(): Promise<string> {
   try {
-    const packageDistDir = path.join(__dirname, '..');
+    const packageDistDir = resolveDistDir();
     const wrapperScriptName = process.platform === 'win32' ? 'run_host.bat' : 'run_host.sh';
     const absoluteWrapperPath = path.resolve(packageDistDir, wrapperScriptName);
     return absoluteWrapperPath;
@@ -151,7 +166,7 @@ export function writeNodePathFile(distDir: string, nodeExecPath = process.execPa
  */
 export async function ensureExecutionPermissions(): Promise<void> {
   try {
-    const packageDistDir = path.join(__dirname, '..');
+    const packageDistDir = resolveDistDir();
 
     if (process.platform === 'win32') {
       // Windows 平台处理
@@ -292,7 +307,7 @@ function verifyWindowsRegistryEntry(registryKey: string, expectedPath: string): 
 export async function registerUserLevelHostWithNodePath(
   browsers?: BrowserType[],
 ): Promise<boolean> {
-  writeNodePathFile(path.join(__dirname, '..'));
+  writeNodePathFile(resolveDistDir());
   return tryRegisterUserLevelHost(browsers);
 }
 
