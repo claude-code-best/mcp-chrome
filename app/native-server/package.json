@@ -33,13 +33,13 @@
   "dependencies": {
     "@hono/node-server": "^1.19.13",
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "chrome-mcp-shared": "^1.0.2",
     "commander": "^13.1.0",
     "hono": "^4.12.12",
     "is-admin": "^4.0.0"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
+    "chrome-mcp-shared": "^1.0.2",
     "@types/chrome": "^0.0.318",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.19.17",
