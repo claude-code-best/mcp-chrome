@@ -57,7 +57,6 @@ for (const ep of entryPoints) {
       'hono',
       '@hono/*',
       'commander',
-      'is-admin',
     ],
   });
 

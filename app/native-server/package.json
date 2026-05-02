@@ -1,6 +1,6 @@
 {
   "name": "@claude-code-best/mcp-chrome-bridge",
-  "version": "3.0.0",
+  "version": "3.0.2",
   "description": "Chrome Native-Messaging host (Node) — MCP + message bridge",
   "main": "dist/index.js",
   "bin": {
@@ -34,8 +34,7 @@
     "@hono/node-server": "^1.19.13",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "commander": "^13.1.0",
-    "hono": "^4.12.12",
-    "is-admin": "^4.0.0"
+    "hono": "^4.12.12"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",

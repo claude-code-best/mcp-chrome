@@ -3,6 +3,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { isAdmin } from './is-admin';
 import { COMMAND_NAME, PACKAGE_NAME } from './constant';
 import { colorText, tryRegisterUserLevelHost, writeNodePathFile } from './utils';
 
@@ -64,11 +65,8 @@ const isGlobalInstall = detectGlobalInstall();
  */
 function isRunningElevated(): boolean {
   if (process.platform === 'win32') {
-    // On Windows, check common admin indicators
-    // Note: Full admin check requires is-admin package which is ESM
-    return false; // Skip for now, Windows npm usually doesn't run as admin by default
+    return isAdmin();
   } else {
-    // On Unix, check if running as root (UID 0)
     return process.getuid?.() === 0;
   }
 }

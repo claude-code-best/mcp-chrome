@@ -5,6 +5,7 @@ import { execSync } from 'child_process';
 import { promisify } from 'util';
 import { COMMAND_NAME, DESCRIPTION, EXTENSION_ID, HOST_NAME } from './constant';
 import { BrowserType, getBrowserConfig, detectInstalledBrowsers } from './browser-config';
+import { isAdmin } from './is-admin';
 
 export const access = promisify(fs.access);
 export const mkdir = promisify(fs.mkdir);
@@ -399,17 +400,6 @@ export async function tryRegisterUserLevelHost(targetBrowsers?: BrowserType[]): 
       ),
     );
     return false;
-  }
-}
-
-// 导入is-admin包（仅在Windows平台使用）
-let isAdmin: () => boolean = () => false;
-if (process.platform === 'win32') {
-  try {
-    isAdmin = require('is-admin');
-  } catch (error) {
-    console.warn('缺少is-admin依赖，Windows平台下可能无法正确检测管理员权限');
-    console.warn(error);
   }
 }
 
